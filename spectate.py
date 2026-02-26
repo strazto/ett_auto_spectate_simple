@@ -30,7 +30,7 @@ import pywinauto
 import requests
 
 SERVER_URL = "http://elevenlogcollector-env.js6z6tixhb.us-west-2.elasticbeanstalk.com/ElevenServerLiteSnapshot"
-INTERVAL = 1  # slows down clicking around
+INTERVAL = 0.2  # slows down clicking around
 
 # Base resolution the mappings were designed for
 BASE_W = 1920
@@ -159,6 +159,9 @@ mappings = {
     "FRIEND_0": Position(0.8453, 0.4148),
     "JOIN_SELECTED": Position(0.8161, 0.7370),
     "FOCUS_CORNER": Position(0.05, 0.05),
+    "LEAVE_ROOM": Position(0.3724, 0.8370),
+    "CONFIRM_LEAVE": Position(0.4203, 0.6898),
+    "DISMISS_RANKED": Position(0.5473, 0.6954),
 }
 
 
@@ -213,19 +216,22 @@ def ensure_menu_state(
     res_config: ResolutionConfig, target_open: bool, timeout: int = 5
 ) -> bool:
     """Ensure menu is in the target state (open/closed). Returns True if successful."""
+    # Reset camera
+    type("0")
+    sleep(INTERVAL)
     # First check
     if is_menu_open(res_config) == target_open:
         return True
 
     # Toggle M
     type("M")
-    sleep(1.0)
+    sleep(INTERVAL)
 
     # Check again with retries
     for _ in range(timeout):
         if is_menu_open(res_config) == target_open:
             return True
-        sleep(0.5)
+        sleep(INTERVAL)
 
     return False
 
@@ -237,7 +243,7 @@ def joinRoom(test: bool) -> None:
 
     # 1. Ensure focus
     _focus_window()
-    sleep(0.5)
+    sleep(INTERVAL)
 
     # 2. Reset menu state (ensure closed first)
     print("Ensuring menu is CLOSED...")
@@ -247,7 +253,7 @@ def joinRoom(test: bool) -> None:
     # 3. Open menu
     print("Opening menu...")
     type("M")
-    sleep(1.0)
+    sleep(INTERVAL)
     if not is_menu_open(_resolution_config):
         print("Menu did not open! Retrying...")
         type("M")
@@ -262,6 +268,8 @@ def joinRoom(test: bool) -> None:
     if not test:
         clickButton("JOIN_SELECTED")
         sleep(1.0)
+        # Change camera so spectator isnt distracting
+        type("1")
     else:
         print("Test mode: Skipping clicks for FRIEND_0 and JOIN_SELECTED")
 
@@ -269,7 +277,13 @@ def joinRoom(test: bool) -> None:
 def exitRoom(test: bool) -> None:
     # Just ensure menu is closed for now
     if _resolution_config:
-        ensure_menu_state(_resolution_config, target_open=False)
+        ensure_menu_state(_resolution_config, target_open=True)
+        clickButton("LEAVE_ROOM")
+        sleep(INTERVAL)
+        clickButton("CONFIRM_LEAVE")
+        sleep(INTERVAL)
+        clickButton("DISMISS_RANKED")
+        sleep(INTERVAL)
 
 
 def type(str):
