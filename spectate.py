@@ -24,6 +24,7 @@ import click
 import cv2
 import mss
 import numpy as np
+import pydirectinput
 import pyautogui
 import pywinauto
 import requests
@@ -53,12 +54,8 @@ class ResolutionConfig:
         height = bottom - top
         return cls(res_x=width, res_y=height, offset_x=left, offset_y=top)
 
-    def resolve(self, base_x: int, base_y: int) -> tuple[int, int]:
-        """Scale base (1920x1080) coordinates to configured resolution and add offset."""
-        # Normalize to 0-1 then scale to current res
-        norm_x = base_x / BASE_W
-        norm_y = base_y / BASE_H
-
+    def resolve(self, norm_x: float, norm_y: float) -> tuple[int, int]:
+        """Scale normalized (0.0-1.0) coordinates to configured resolution and add offset."""
         x = round(norm_x * self.res_x + self.offset_x)
         y = round(norm_y * self.res_y + self.offset_y)
         return (x, y)
@@ -124,14 +121,9 @@ def is_menu_open(
             # Load template
             template = cv2.imread(template_path)
             if template is None:
-                # If template missing, warn once?
                 return False
 
-            # If window size differs significantly from 1080p, we might need to resize frame or template
-            # For now, assuming template is for 1080p and we might need scaling if window != 1080p
-            # But prompt said: "normalizing... using a template... once we measure those normalized coordinates"
-            # Let's just do direct match for now or resize frame to 1080p
-
+            # Resize frame to 1080p for matching if needed
             target_h, target_w = BASE_H, BASE_W
             if frame_bgr.shape[:2] != (target_h, target_w):
                 frame_bgr = cv2.resize(frame_bgr, (target_w, target_h))
@@ -155,26 +147,24 @@ def retrieve_url(url):
 
 
 class Position:
-    x = 0
-    y = 0
+    x: float
+    y: float
 
-    def __init__(self, x, y):
+    def __init__(self, x: float, y: float):
         self.x = x
         self.y = y
 
 
 mappings = {
-    "HOME": Position(600, 900),
-    "JOINROOM": Position(1850, 470),
-    "EXITROOM": Position(1217, 974),
-    "FOCUS": Position(960, 540),  # center of 1920x1080, safe spot to click
+    "FRIEND_0": Position(0.8453, 0.4148),
+    "JOIN_SELECTED": Position(0.8161, 0.7370),
+    "FOCUS_CORNER": Position(0.05, 0.05),
 }
 
 
 def _focus_window() -> None:
-    """Click center of window to bring it into focus before the sequence."""
-    clickButton("FOCUS", move_only=False)
-
+    """Click corner of window to bring it into focus before the sequence."""
+    clickButton("FOCUS_CORNER", move_only=False)
 
 def before_and_after_click(func):
     def wrapper(*args, **kwargs):
@@ -187,7 +177,6 @@ def before_and_after_click(func):
         func(*args, **kwargs)
         type("M")
         return
-
     return wrapper
 
 
@@ -196,7 +185,9 @@ def clickButton(button: str, move_only: bool = False) -> None:
     if _resolution_config is not None:
         x, y = _resolution_config.resolve(base.x, base.y)
     else:
-        x, y = base.x, base.y
+        # Fallback if no config (shouldn't happen in loop)
+        x, y = int(base.x * BASE_W), int(base.y * BASE_H)
+
     pyautogui.moveTo(x, y)
     if not move_only:
         # pyautogui.click()
@@ -218,12 +209,67 @@ def clickListOfButtons(list_of_buttons, move_only=False):
         sleep(INTERVAL)
 
 
-def joinRoom(test):
-    clickListOfButtons("HOME JOINROOM".split())
+def ensure_menu_state(
+    res_config: ResolutionConfig, target_open: bool, timeout: int = 5
+) -> bool:
+    """Ensure menu is in the target state (open/closed). Returns True if successful."""
+    # First check
+    if is_menu_open(res_config) == target_open:
+        return True
+
+    # Toggle M
+    type("M")
+    sleep(1.0)
+
+    # Check again with retries
+    for _ in range(timeout):
+        if is_menu_open(res_config) == target_open:
+            return True
+        sleep(0.5)
+
+    return False
 
 
-def exitRoom(test):
-    clickListOfButtons("HOME EXITROOM".split())
+def joinRoom(test: bool) -> None:
+    if _resolution_config is None:
+        print("Cannot join room: Window not found/configured.")
+        return
+
+    # 1. Ensure focus
+    _focus_window()
+    sleep(0.5)
+
+    # 2. Reset menu state (ensure closed first)
+    print("Ensuring menu is CLOSED...")
+    if not ensure_menu_state(_resolution_config, target_open=False):
+        print("Failed to close menu! Attempting to proceed anyway...")
+
+    # 3. Open menu
+    print("Opening menu...")
+    type("M")
+    sleep(1.0)
+    if not is_menu_open(_resolution_config):
+        print("Menu did not open! Retrying...")
+        type("M")
+        sleep(1.0)
+
+    # 4. Select friend
+    if not test:
+        clickButton("FRIEND_0")
+        sleep(1.0)
+
+    # 5. Join
+    if not test:
+        clickButton("JOIN_SELECTED")
+        sleep(1.0)
+    else:
+        print("Test mode: Skipping clicks for FRIEND_0 and JOIN_SELECTED")
+
+
+def exitRoom(test: bool) -> None:
+    # Just ensure menu is closed for now
+    if _resolution_config:
+        ensure_menu_state(_resolution_config, target_open=False)
 
 
 def type(str):
@@ -284,34 +330,8 @@ def print_mouse(res_config: ResolutionConfig | None = None):
     "--test", "-t", is_flag=True, default=False, help="Whether to avoid clicks"
 )
 @click.option("--user", "-u", help="Username", required=True)
-@click.option(
-    "--res-x",
-    default=BASE_W,
-    type=int,
-    help="Target screen/window width (default: 1920)",
-)
-@click.option(
-    "--res-y",
-    default=BASE_H,
-    type=int,
-    help="Target screen/window height (default: 1080)",
-)
-@click.option(
-    "--offset-x",
-    default=0,
-    type=int,
-    help="X offset of the active window (e.g. if window is not at 0)",
-)
-@click.option("--offset-y", default=0, type=int, help="Y offset of the active window")
-def main(
-    user: str, test: bool, res_x: int, res_y: int, offset_x: int, offset_y: int
-) -> None:
+def main(user: str, test: bool) -> None:
     global _resolution_config
-
-    # Initial config from CLI (fallback)
-    _resolution_config = ResolutionConfig(
-        res_x=res_x, res_y=res_y, offset_x=offset_x, offset_y=offset_y
-    )
 
     print("Starting spectator bot...")
 
@@ -321,25 +341,20 @@ def main(
         print(f"Found 'Eleven' window at {window_rect}")
         _resolution_config = ResolutionConfig.from_window_rect(window_rect)
     else:
-        print("Window 'Eleven' not found. Using CLI/default resolution config.")
+        print("Window 'Eleven' not found. Will keep searching...")
 
     # it assumes that menu is off in the UI
 
     while True:
-        # Periodically ensure window is found/focused if we want strict window management
-        # For now, just re-check if we suspect issues, or stick to initial config.
-        # But the plan said "Loop: Find/Ensure window is focused."
-
-        # Let's try to find/focus window every iteration to be robust?
-        # Might be too spammy to print "Found window" every time.
-        # But we should ensure focus.
-
-        # We can implement a lightweight "ensure focus" here or just let the tool run.
-        # Given "Main loop to report mouse position... Check Menu State", let's do that.
-
         print(f"Waiting until {user} is in a room...")
         inRoom = False
         while not inRoom:
+            # Periodically update window config if lost or not found yet
+            if _resolution_config is None or not find_window_rect():
+                rect = find_window_rect()
+                if rect:
+                    _resolution_config = ResolutionConfig.from_window_rect(rect)
+
             inRoom = isInRoom(user)
             print_mouse(_resolution_config)
             sleep(INTERVAL)
