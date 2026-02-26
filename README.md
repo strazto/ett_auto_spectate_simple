@@ -38,9 +38,15 @@ You'll need to have python and `uv` installed to run the script.
          you can configure a third camera (Eg, Camera 2) on a secondary display in `Advanced > Spectator` settings
        - The secondary display would be the window you stream on eg OBS in that case
        - This is a bit fiddly, so I wont get into it
-  3. **Important** in your Eleven desktop settings, go:
-     - `Advanced > Network`
-     - and ensure `Use Guest Account` is **ENABLED**
+  3. **Important** Guest Account:
+     - Enable guest:
+       - in your Eleven desktop settings, go:
+       - `Advanced > Network`
+       - and ensure `Use Guest Account` is **ENABLED**
+     - Add your main account as a friend on the guest
+       - The guest account should have exactly one friend added - your main account
+       - This ensures that the control to select your main account (and spectate it) is always in the same position
+       - Add your main account from the guest desktop, and from your headset, accept this
 
 
 # Running the script
