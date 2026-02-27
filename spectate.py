@@ -88,6 +88,8 @@ def find_window_rect(title_pattern: str = "Eleven") -> tuple[int, int, int, int]
         # Bring to foreground (optional, but good for focus)
         try:
             window.set_focus()
+        except KeyboardInterrupt:
+            raise KeyboardInterrupt
         except Exception:
             pass  # Might fail if already focused or restricted
 
@@ -132,7 +134,8 @@ def is_menu_open(
             _, max_val, _, _ = cv2.minMaxLoc(res)
 
             return max_val > 0.8  # Threshold
-
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt
     except Exception as e:
         print(f"Vision error: {e}")
         return False
@@ -296,8 +299,8 @@ def isInRoom(user):
         content = json.loads(retrieve_url(SERVER_URL))
     except KeyboardInterrupt:
         raise KeyboardInterrupt
-    except:
-        warnings.warn("Failed to retrieve data from server.")
+    except Exception as e:
+        warnings.warn(f"Failed to retrieve data from server.: {e}")
         return None
     users = [x for x in content["UsersInRooms"] if x["UserName"] == user]
     if len(users) > 0:
