@@ -221,6 +221,7 @@ def ensure_menu_state(
     res_config: ResolutionConfig, target_open: bool, timeout: int = 5
 ) -> bool:
     """Ensure menu is in the target state (open/closed). Returns True if successful."""
+    _focus_window()
     # Reset camera
     type("0")
     sleep(INTERVAL)
@@ -274,7 +275,7 @@ def joinRoom(test: bool) -> None:
         clickButton("JOIN_SELECTED")
         sleep(1.0)
         # Change camera so spectator isnt distracting
-        type("1")
+        type("9")
     else:
         print("Test mode: Skipping clicks for FRIEND_0 and JOIN_SELECTED")
 
@@ -307,6 +308,18 @@ def isInRoom(user):
         raise KeyboardInterrupt
     except Exception as e:
         warnings.warn(f"Failed to retrieve data from server.: {e}")
+        if _resolution_config:
+            print("Server error; attempting visual fallback...")
+            try:
+                ensure_menu_state(_resolution_config, target_open=True)
+                if is_menu_open(
+                    _resolution_config,
+                    template_path="templates_1080p/join_room_icon.jpg",
+                ):
+                    print("Visual fallback: Join icon detected.")
+                    return True
+            except Exception as ve:
+                print(f"Visual fallback failed: {ve}")
         return None
     users = [x for x in content["UsersInRooms"] if x["UserName"] == user]
     if len(users) > 0:
