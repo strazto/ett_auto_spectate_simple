@@ -142,10 +142,12 @@ def is_menu_open(
 
 
 def retrieve_url(url):
-    response = requests.get(url)
+    response = requests.get(url, timeout=5)
     if response.status_code == 200:
         return response.text
     else:
+        warnings.warn(f"Server returned status code {response.status_code}")
+        warnings.warn(f"Server returned {response.text}")
         return None
 
 
@@ -296,7 +298,11 @@ def type(str):
 
 def isInRoom(user):
     try:
-        content = json.loads(retrieve_url(SERVER_URL))
+        resp = retrieve_url(SERVER_URL)
+        if not resp:
+            warnings.warn("Server returned none")
+            return None
+        content = json.loads()
     except KeyboardInterrupt:
         raise KeyboardInterrupt
     except Exception as e:
