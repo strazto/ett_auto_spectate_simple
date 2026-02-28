@@ -327,6 +327,9 @@ class SpectatorBot:
             and (x := x["attributes"])
             and x["state"]
         )
+
+        if state is not None:
+            print(f"Got some state :) {state}")
         # state is 1 for won
         # 0 for ongoing (i think)
         # -1 has some meaning too i think?
