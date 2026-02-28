@@ -294,9 +294,7 @@ class SpectatorBot:
             return None
 
     def get_userid(self) -> str | None:
-        resp = self._retrieve_url(
-            f"{self.server_base_url}/accounts/search/{self.user}?api-key={self.api_key}"
-        )
+        resp = self._retrieve_url(f"{self.server_base_url}/accounts/search/{self.user}")
         if not resp:
             warnings.warn("Server returned none")
             return None
@@ -313,7 +311,8 @@ class SpectatorBot:
 
     def is_in_room(self) -> bool | None:
         resp = self._retrieve_url(
-            f"{self.server_base_url}/accounts/${self.user_id}/matches?page[number]=1&page[size]=1&api-key={self.api_key}"
+            f"{self.server_base_url}/accounts/${self.user_id}/matches",
+            {"page[number]": "1", "page[size]": "1"},
         )
         if not resp:
             warnings.warn("Server returned none")
@@ -341,8 +340,6 @@ class SpectatorBot:
                 return None
             content = json.loads(resp)
 
-
-
             users = [
                 x for x in content.get("UsersInRooms", []) if x.get("UserName") == user
             ]
@@ -353,9 +350,11 @@ class SpectatorBot:
             warnings.warn(f"Failed to retrieve data from server: {e}")
             return None
 
-    def _retrieve_url(self, url: str) -> str | None:
+    def _retrieve_url(self, url: str, params: dict[str, str] = {}) -> str | None:
         try:
-            response = requests.get(url, timeout=5)
+            response = requests.get(
+                url, timeout=5, params={"api-key": self.api_key, **params}
+            )
             if response.status_code == 200:
                 return response.text
             return None
