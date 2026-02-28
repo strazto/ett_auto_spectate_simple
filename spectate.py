@@ -18,6 +18,7 @@ import json
 import sys
 import warnings
 from dataclasses import dataclass
+from enum import Enum, auto
 from time import sleep
 
 import click
@@ -70,87 +71,6 @@ class ResolutionConfig:
         return (norm_x, norm_y)
 
 
-# Set by main() from CLI or window detection; used by clickButton
-_resolution_config: ResolutionConfig | None = None
-
-
-def find_window_rect(title_pattern: str = "Eleven") -> tuple[int, int, int, int] | None:
-    """Find the game window and return its (left, top, right, bottom) rect."""
-    try:
-        # Connect to application
-        app = pywinauto.Application(backend="uia").connect(title_re=title_pattern)
-        window = app.window(title_re=title_pattern)
-
-        if not window.exists():
-            print(f"Window matching '{title_pattern}' not found.")
-            return None
-
-        # Bring to foreground (optional, but good for focus)
-        try:
-            window.set_focus()
-        except KeyboardInterrupt:
-            raise KeyboardInterrupt
-        except Exception:
-            pass  # Might fail if already focused or restricted
-
-        rect = window.rectangle()
-        return (rect.left, rect.top, rect.right, rect.bottom)
-    except Exception as e:
-        print(f"Error finding window: {e}")
-        return None
-
-
-def is_menu_open(
-    res_config: ResolutionConfig,
-    template_path: str = "templates_1080p/power_menu_icon.jpg",
-) -> bool:
-    """Check if the menu is open by matching the power icon template."""
-    try:
-        with mss.mss() as sct:
-            # Capture the window area
-            monitor = {
-                "top": res_config.offset_y,
-                "left": res_config.offset_x,
-                "width": res_config.res_x,
-                "height": res_config.res_y,
-            }
-            sct_img = sct.grab(monitor)
-
-            # Convert to numpy array (BGRA) then to BGR for OpenCV
-            frame = np.array(sct_img)
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-
-            # Load template
-            template = cv2.imread(template_path)
-            if template is None:
-                return False
-
-            # Resize frame to 1080p for matching if needed
-            target_h, target_w = BASE_H, BASE_W
-            if frame_bgr.shape[:2] != (target_h, target_w):
-                frame_bgr = cv2.resize(frame_bgr, (target_w, target_h))
-
-            res = cv2.matchTemplate(frame_bgr, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(res)
-
-            return max_val > 0.8  # Threshold
-    except KeyboardInterrupt:
-        raise KeyboardInterrupt
-    except Exception as e:
-        print(f"Vision error: {e}")
-        return False
-
-
-def retrieve_url(url):
-    response = requests.get(url, timeout=5)
-    if response.status_code == 200:
-        return response.text
-    else:
-        warnings.warn(f"Server returned status code {response.status_code}")
-        warnings.warn(f"Server returned {response.text}")
-        return None
-
-
 class Position:
     x: float
     y: float
@@ -160,7 +80,7 @@ class Position:
         self.y = y
 
 
-mappings = {
+MAPPINGS = {
     "FRIEND_0": Position(0.8453, 0.4148),
     "JOIN_SELECTED": Position(0.8161, 0.7370),
     "FOCUS_CORNER": Position(0.05, 0.05),
@@ -170,183 +90,330 @@ mappings = {
 }
 
 
-def _focus_window() -> None:
-    """Click corner of window to bring it into focus before the sequence."""
-    clickButton("FOCUS_CORNER", move_only=False)
-
-def before_and_after_click(func):
-    def wrapper(*args, **kwargs):
-        _focus_window()
-        sleep(INTERVAL)
-        type("M")
-        sleep(INTERVAL)
-        type("0")
-        sleep(INTERVAL)
-        func(*args, **kwargs)
-        type("M")
-        return
-    return wrapper
+class BotState(Enum):
+    SEARCHING_WINDOW = auto()
+    WAITING_FOR_USER = auto()
+    JOINING = auto()
+    SPECTATING = auto()
+    LEAVING = auto()
 
 
-def clickButton(button: str, move_only: bool = False) -> None:
-    base = mappings[button]
-    if _resolution_config is not None:
-        x, y = _resolution_config.resolve(base.x, base.y)
-    else:
-        # Fallback if no config (shouldn't happen in loop)
-        x, y = int(base.x * BASE_W), int(base.y * BASE_H)
+class SpectatorBot:
+    def __init__(self, user: str, test_mode: bool):
+        self.user = user
+        self.test_mode = test_mode
+        self.state = BotState.SEARCHING_WINDOW
+        self.res_config: ResolutionConfig | None = None
 
-    pyautogui.moveTo(x, y)
-    if not move_only:
-        # pyautogui.click()
-        pyautogui.mouseDown()
-        sleep(0.05)
-        pyautogui.mouseUp()
-        print(f"Clicked {button}")
-    else:
-        print(f"Moved to {x, y}")
-        sleep(0.3)
+    def run(self):
+        """Main FSM loop."""
+        print(
+            f"Starting spectator bot for user: {self.user} (Test Mode: {self.test_mode})"
+        )
 
+        while True:
+            try:
+                if self.state == BotState.SEARCHING_WINDOW:
+                    self._handle_searching_window()
+                elif self.state == BotState.WAITING_FOR_USER:
+                    self._handle_waiting_for_user()
+                elif self.state == BotState.JOINING:
+                    self._handle_joining()
+                elif self.state == BotState.SPECTATING:
+                    self._handle_spectating()
+                elif self.state == BotState.LEAVING:
+                    self._handle_leaving()
+            except KeyboardInterrupt:
+                print("\nBot stopped by user.")
+                break
+            except Exception as e:
+                print(f"Unexpected error in state {self.state.name}: {e}")
+                sleep(1)
 
-@before_and_after_click
-def clickListOfButtons(list_of_buttons, move_only=False):
-    for button in (
-        list_of_buttons if isinstance(list_of_buttons, list) else [list_of_buttons]
-    ):
-        clickButton(button, move_only=move_only)
-        sleep(INTERVAL)
-
-
-def ensure_menu_state(
-    res_config: ResolutionConfig, target_open: bool, timeout: int = 5
-) -> bool:
-    """Ensure menu is in the target state (open/closed). Returns True if successful."""
-    _focus_window()
-    # Reset camera
-    type("0")
-    sleep(INTERVAL)
-    # First check
-    if is_menu_open(res_config) == target_open:
-        return True
-
-    # Toggle M
-    type("M")
-    sleep(INTERVAL)
-
-    # Check again with retries
-    for _ in range(timeout):
-        if is_menu_open(res_config) == target_open:
-            return True
-        sleep(INTERVAL)
-
-    return False
-
-
-def joinRoom(test: bool) -> None:
-    if _resolution_config is None:
-        print("Cannot join room: Window not found/configured.")
-        return
-
-    # 1. Ensure focus
-    _focus_window()
-    sleep(INTERVAL)
-
-    # 2. Reset menu state (ensure closed first)
-    print("Ensuring menu is CLOSED...")
-    if not ensure_menu_state(_resolution_config, target_open=False):
-        print("Failed to close menu! Attempting to proceed anyway...")
-
-    # 3. Open menu
-    print("Opening menu...")
-    type("M")
-    sleep(INTERVAL)
-    if not is_menu_open(_resolution_config):
-        print("Menu did not open! Retrying...")
-        type("M")
-        sleep(1.0)
-
-    # 4. Select friend
-    if not test:
-        clickButton("FRIEND_0")
-        sleep(1.0)
-
-    # 5. Join
-    if not test:
-        clickButton("JOIN_SELECTED")
-        sleep(1.0)
-        # Change camera so spectator isnt distracting
-        type("9")
-    else:
-        print("Test mode: Skipping clicks for FRIEND_0 and JOIN_SELECTED")
-
-
-def exitRoom(test: bool) -> None:
-    # Just ensure menu is closed for now
-    if _resolution_config:
-        ensure_menu_state(_resolution_config, target_open=True)
-        clickButton("LEAVE_ROOM")
-        sleep(INTERVAL)
-        clickButton("CONFIRM_LEAVE")
-        sleep(INTERVAL)
-        clickButton("DISMISS_RANKED")
-        sleep(INTERVAL)
-
-
-def type(str):
-    print(f"Pressed {str}")
-    pyautogui.write(str)
-
-
-def isInRoom(user):
-    try:
-        resp = retrieve_url(SERVER_URL)
-        if not resp:
-            warnings.warn("Server returned none")
-            return None
-        content = json.loads()
-    except KeyboardInterrupt:
-        raise KeyboardInterrupt
-    except Exception as e:
-        warnings.warn(f"Failed to retrieve data from server.: {e}")
-        return None
-    users = [x for x in content["UsersInRooms"] if x["UserName"] == user]
-    if len(users) > 0:
-        print(users)
-        sys.stdout.flush()
-        return True
-
-    sys.stdout.flush()
-    return False
-
-
-def print_mouse(res_config: ResolutionConfig | None = None):
-    mouse_position = pyautogui.position()
-
-    if res_config:
-        # Check if inside window
-        if (
-            res_config.offset_x
-            <= mouse_position[0]
-            < res_config.offset_x + res_config.res_x
-            and res_config.offset_y
-            <= mouse_position[1]
-            < res_config.offset_y + res_config.res_y
-        ):
-
-            norm_x, norm_y = res_config.normalize(mouse_position[0], mouse_position[1])
-            menu_status = "OPEN" if is_menu_open(res_config) else "CLOSED"
-            print(
-                f"Mouse: {norm_x:.4f}, {norm_y:.4f} (Norm) | Menu: {menu_status} | Pos: {mouse_position[0]}, {mouse_position[1]}",
-                end="",
-            )
+    def _handle_searching_window(self):
+        rect = self.find_window_rect()
+        if rect:
+            self.res_config = ResolutionConfig.from_window_rect(rect)
+            print(f"Found 'Eleven' window at {rect}")
+            self.state = BotState.WAITING_FOR_USER
         else:
-            print(
-                f"Mouse: OUTSIDE | Pos: {mouse_position[0]}, {mouse_position[1]}",
-                end="",
-            )
-    else:
-        print(f"Mouse: {mouse_position[0]:04d}, {mouse_position[1]:04d}", end="")
-    sys.stdout.write("\r")
+            print("Searching for 'Eleven' window...", end="\r")
+            sleep(2)
+
+    def _handle_waiting_for_user(self):
+        if not self._check_window_valid():
+            return
+
+        print(f"Waiting for {self.user} to enter a room...", end="\r")
+
+        # In waiting state, we print mouse coords for debugging
+        self.print_mouse()
+
+        if self.is_in_room(self.user):
+            print(f"\nUser {self.user} found in room!")
+            self.state = BotState.JOINING
+        else:
+            sleep(INTERVAL)
+
+    def _handle_joining(self):
+        if not self._check_window_valid():
+            return
+
+        print("Executing join sequence...")
+
+        # Ensure config is present (guaranteed by _check_window_valid)
+        assert self.res_config is not None
+
+        # 1. Ensure focus
+        self._focus_window()
+        sleep(INTERVAL)
+
+        # 2. Reset menu state (ensure closed first)
+        print("Ensuring menu is CLOSED...")
+        if not self.ensure_menu_state(target_open=False):
+            print("Failed to close menu! Attempting to proceed anyway...")
+
+        # 3. Open menu
+        print("Opening menu...")
+        self._press_key("M")
+        sleep(INTERVAL)
+        if not self.is_menu_open():
+            print("Menu did not open! Retrying...")
+            self._press_key("M")
+            sleep(1.0)
+
+        # 4. Select friend
+        if not self.test_mode:
+            self.click_button("FRIEND_0")
+            sleep(1.0)
+        else:
+            print("Test mode: Skipping click FRIEND_0")
+
+        # 5. Join
+        if not self.test_mode:
+            self.click_button("JOIN_SELECTED")
+            sleep(1.0)
+            # Change camera so spectator isnt distracting
+            self._press_key("9")
+        else:
+            print("Test mode: Skipping click JOIN_SELECTED")
+
+        self.state = BotState.SPECTATING
+
+    def _handle_spectating(self):
+        if not self._check_window_valid():
+            return
+
+        # Poll if user is still in room
+        in_room = self.is_in_room(self.user)
+
+        self.print_mouse()
+
+        if (
+            in_room is False
+        ):  # Explicit False means successful check returned "not in room"
+            print(f"\nUser {self.user} left the room.")
+            self.state = BotState.LEAVING
+        elif in_room is None:
+            # Server error or timeout, stay in spectating but warn
+            pass
+
+        sleep(INTERVAL)
+
+    def _handle_leaving(self):
+        if not self._check_window_valid():
+            return
+
+        print("Leaving room...")
+
+        if self.res_config:
+            self.ensure_menu_state(target_open=True)
+            self.click_button("LEAVE_ROOM")
+            sleep(INTERVAL)
+            self.click_button("CONFIRM_LEAVE")
+            sleep(INTERVAL)
+            self.click_button("DISMISS_RANKED")
+            sleep(INTERVAL)
+
+        self.state = BotState.WAITING_FOR_USER
+
+    def _check_window_valid(self) -> bool:
+        """Verify window still exists. If not, transition to SEARCHING_WINDOW."""
+        rect = self.find_window_rect()
+        if not rect:
+            print("\nWindow lost! Switching to search mode.")
+            self.state = BotState.SEARCHING_WINDOW
+            self.res_config = None
+            return False
+
+        # Update config in case window moved
+        self.res_config = ResolutionConfig.from_window_rect(rect)
+        return True
+
+    # --- Helpers ---
+
+    def find_window_rect(
+        self, title_pattern: str = "Eleven"
+    ) -> tuple[int, int, int, int] | None:
+        """Find the game window and return its (left, top, right, bottom) rect."""
+        try:
+            # Connect to application
+            app = pywinauto.Application(backend="uia").connect(title_re=title_pattern)
+            window = app.window(title_re=title_pattern)
+
+            if not window.exists():
+                return None
+
+            try:
+                window.set_focus()
+            except Exception:
+                pass
+
+            rect = window.rectangle()
+            return (rect.left, rect.top, rect.right, rect.bottom)
+        except Exception:
+            return None
+
+    def is_in_room(self, user: str) -> bool | None:
+        try:
+            resp = self._retrieve_url(SERVER_URL)
+            if not resp:
+                # warnings.warn("Server returned none")
+                return None
+            content = json.loads(resp)
+
+            # Debug: print users occasionally? No, keep clean.
+
+            users = [
+                x for x in content.get("UsersInRooms", []) if x.get("UserName") == user
+            ]
+            if len(users) > 0:
+                return True
+            return False
+        except Exception as e:
+            # warnings.warn(f"Failed to retrieve data from server: {e}")
+            return None
+
+    def _retrieve_url(self, url: str) -> str | None:
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                return response.text
+            return None
+        except Exception:
+            return None
+
+    def click_button(self, button_name: str, move_only: bool = False) -> None:
+        if not self.res_config:
+            return
+
+        base = MAPPINGS[button_name]
+        x, y = self.res_config.resolve(base.x, base.y)
+
+        pyautogui.moveTo(x, y)
+        if not move_only:
+            pyautogui.mouseDown()
+            sleep(0.05)
+            pyautogui.mouseUp()
+            print(f"Clicked {button_name}")
+        else:
+            print(f"Moved to {x, y}")
+            sleep(0.3)
+
+    def _focus_window(self) -> None:
+        """Click corner of window to bring it into focus."""
+        self.click_button("FOCUS_CORNER", move_only=False)
+
+    def _press_key(self, key: str):
+        print(f"Pressed {key}")
+        pyautogui.write(key)
+
+    def is_menu_open(
+        self, template_path: str = "templates_1080p/power_menu_icon.jpg"
+    ) -> bool:
+        if not self.res_config:
+            return False
+
+        try:
+            with mss.mss() as sct:
+                monitor = {
+                    "top": self.res_config.offset_y,
+                    "left": self.res_config.offset_x,
+                    "width": self.res_config.res_x,
+                    "height": self.res_config.res_y,
+                }
+                sct_img = sct.grab(monitor)
+                frame = np.array(sct_img)
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+                template = cv2.imread(template_path)
+                if template is None:
+                    return False
+
+                # Resize frame to 1080p for matching if needed
+                target_h, target_w = BASE_H, BASE_W
+                if frame_bgr.shape[:2] != (target_h, target_w):
+                    frame_bgr = cv2.resize(frame_bgr, (target_w, target_h))
+
+                res = cv2.matchTemplate(frame_bgr, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(res)
+
+                return max_val > 0.8
+        except Exception as e:
+            print(f"Vision error: {e}")
+            return False
+
+    def ensure_menu_state(self, target_open: bool, timeout: int = 5) -> bool:
+        self._focus_window()
+        # Reset camera
+        self._press_key("0")
+        sleep(INTERVAL)
+
+        # First check
+        if self.is_menu_open() == target_open:
+            return True
+
+        # Toggle M
+        self._press_key("M")
+        sleep(INTERVAL)
+
+        # Check again with retries
+        for _ in range(timeout):
+            if self.is_menu_open() == target_open:
+                return True
+            sleep(INTERVAL)
+
+        return False
+
+    def print_mouse(self):
+        mouse_position = pyautogui.position()
+
+        if self.res_config:
+            # Check if inside window
+            if (
+                self.res_config.offset_x
+                <= mouse_position[0]
+                < self.res_config.offset_x + self.res_config.res_x
+                and self.res_config.offset_y
+                <= mouse_position[1]
+                < self.res_config.offset_y + self.res_config.res_y
+            ):
+                norm_x, norm_y = self.res_config.normalize(
+                    mouse_position[0], mouse_position[1]
+                )
+                menu_status = "OPEN" if self.is_menu_open() else "CLOSED"
+                print(
+                    f"Mouse: {norm_x:.4f}, {norm_y:.4f} (Norm) | Menu: {menu_status} | Pos: {mouse_position[0]}, {mouse_position[1]}",
+                    end="",
+                )
+            else:
+                print(
+                    f"Mouse: OUTSIDE | Pos: {mouse_position[0]}, {mouse_position[1]}",
+                    end="",
+                )
+        else:
+            print(f"Mouse: {mouse_position[0]:04d}, {mouse_position[1]:04d}", end="")
+        sys.stdout.write("\r")
 
 
 @click.command()
@@ -355,55 +422,8 @@ def print_mouse(res_config: ResolutionConfig | None = None):
 )
 @click.option("--user", "-u", help="Username", required=True)
 def main(user: str, test: bool) -> None:
-    global _resolution_config
-
-    print("Starting spectator bot...")
-
-    # Try to find window immediately to update config
-    window_rect = find_window_rect()
-    if window_rect:
-        print(f"Found 'Eleven' window at {window_rect}")
-        _resolution_config = ResolutionConfig.from_window_rect(window_rect)
-    else:
-        print("Window 'Eleven' not found. Will keep searching...")
-
-    # it assumes that menu is off in the UI
-
-    while True:
-        print(f"Waiting until {user} is in a room...")
-        inRoom = False
-        while not inRoom:
-            # Periodically update window config if lost or not found yet
-            if _resolution_config is None or not find_window_rect():
-                rect = find_window_rect()
-                if rect:
-                    _resolution_config = ResolutionConfig.from_window_rect(rect)
-
-            inRoom = isInRoom(user)
-            print_mouse(_resolution_config)
-            sleep(INTERVAL)
-
-        # Clear line after loop
-        print(" " * 80)
-        print(f"User {user} is in a room!", end="\n")
-        print("Joining room.")
-
-        # Ensure window is fresh before joining
-        rect = find_window_rect()
-        if rect:
-            _resolution_config = ResolutionConfig.from_window_rect(rect)
-
-        joinRoom(test)
-
-        while inRoom or inRoom is None:
-            inRoom = isInRoom(user)
-            print_mouse(_resolution_config)
-            sleep(INTERVAL)
-
-        print(" " * 80)
-        print(f"User {user} is no longer in a room.")
-        print("Leaving room.")
-        exitRoom(test)
+    bot = SpectatorBot(user=user, test_mode=test)
+    bot.run()
 
 
 if __name__ == "__main__":
