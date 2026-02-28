@@ -7,6 +7,7 @@
 #     "opencv-python>=4.13.0.92",
 #     "pyautogui>=0.9.54",
 #     "pydirectinput>=1.0.4",
+#     "python-dotenv>=1.0.1",
 #     "pywinauto>=0.6.9",
 #     "requests>=2.32.5",
 #     "rich>=14.3.3",
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import warnings
 from dataclasses import dataclass
@@ -29,8 +31,10 @@ import pydirectinput
 import pyautogui
 import pywinauto
 import requests
+from dotenv import load_dotenv
 
-SERVER_URL = "http://elevenlogcollector-env.js6z6tixhb.us-west-2.elasticbeanstalk.com/ElevenServerLiteSnapshot"
+DEFAULT_SERVER_BASE_URL = "https://api3.elevenvr.com"
+# DEFAULT_SERVER_URL = "http://elevenlogcollector-env.js6z6tixhb.us-west-2.elasticbeanstalk.com/ElevenServerLiteSnapshot"
 INTERVAL = 0.2  # slows down clicking around
 
 # Base resolution the mappings were designed for
@@ -99,9 +103,20 @@ class BotState(Enum):
 
 
 class SpectatorBot:
-    def __init__(self, user: str, test_mode: bool):
+    def __init__(
+        self,
+        user: str,
+        test_mode: bool,
+        api_key: str | None = None,
+        server_base_url: str | None = None,
+    ):
         self.user = user
         self.test_mode = test_mode
+        self.api_key = api_key
+        self.server_base_url = (
+            server_base_url if server_base_url else DEFAULT_SERVER_BASE_URL
+        )
+        self.user_id = self.get_userid()
         self.state = BotState.SEARCHING_WINDOW
         self.res_config: ResolutionConfig | None = None
 
@@ -110,6 +125,10 @@ class SpectatorBot:
         print(
             f"Starting spectator bot for user: {self.user} (Test Mode: {self.test_mode})"
         )
+        if self.api_key:
+            print("API Key loaded successfully.")
+        else:
+            print("Warning: No API Key found.")
 
         while True:
             try:
@@ -274,15 +293,55 @@ class SpectatorBot:
         except Exception:
             return None
 
-    def is_in_room(self, user: str) -> bool | None:
+    def get_userid(self) -> str | None:
+        resp = self._retrieve_url(
+            f"{self.server_base_url}/accounts/search/{self.user}?api-key={self.api_key}"
+        )
+        if not resp:
+            warnings.warn("Server returned none")
+            return None
+        content = json.loads(resp)
+
+        userId: str | None = (
+            (x := content) and (x := x["data"]) and (x := x[0]) and x["id"]
+        )
+        if not userId:
+            warnings.warn(f"No userId found from {resp}")
+
+        print(f"Found user_id {userId}")
+        return userId
+
+    def is_in_room(self) -> bool | None:
+        resp = self._retrieve_url(
+            f"{self.server_base_url}/accounts/${self.user_id}/matches?page[number]=1&page[size]=1&api-key={self.api_key}"
+        )
+        if not resp:
+            warnings.warn("Server returned none")
+            return None
+
+        content = json.loads(resp)
+        state: int | None = (
+            (x := content)
+            and (x := x["data"])
+            and (x := x[0])
+            and (x := x["attributes"])
+            and x["state"]
+        )
+        # state is -1 for ongoing
+        if state == -1:
+            return True
+
+        return False
+
+    def is_in_room_old(self, user: str) -> bool | None:
         try:
-            resp = self._retrieve_url(SERVER_URL)
+            resp = self._retrieve_url(self.server_base_url)
             if not resp:
-                # warnings.warn("Server returned none")
+                warnings.warn("Server returned none")
                 return None
             content = json.loads(resp)
 
-            # Debug: print users occasionally? No, keep clean.
+
 
             users = [
                 x for x in content.get("UsersInRooms", []) if x.get("UserName") == user
@@ -291,7 +350,7 @@ class SpectatorBot:
                 return True
             return False
         except Exception as e:
-            # warnings.warn(f"Failed to retrieve data from server: {e}")
+            warnings.warn(f"Failed to retrieve data from server: {e}")
             return None
 
     def _retrieve_url(self, url: str) -> str | None:
@@ -422,7 +481,12 @@ class SpectatorBot:
 )
 @click.option("--user", "-u", help="Username", required=True)
 def main(user: str, test: bool) -> None:
-    bot = SpectatorBot(user=user, test_mode=test)
+    load_dotenv()
+    api_key = os.getenv("API_KEY")
+    server_base_url = os.getenv("SERVER_BASE_URL")
+    bot = SpectatorBot(
+        user=user, test_mode=test, api_key=api_key, server_base_url=server_base_url
+    )
     bot.run()
 
 
