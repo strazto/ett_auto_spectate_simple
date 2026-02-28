@@ -168,7 +168,7 @@ class SpectatorBot:
         # In waiting state, we print mouse coords for debugging
         self.print_mouse()
 
-        if self.is_in_room(self.user):
+        if self.is_in_room():
             print(f"\nUser {self.user} found in room!")
             self.state = BotState.JOINING
         else:
@@ -224,7 +224,7 @@ class SpectatorBot:
             return
 
         # Poll if user is still in room
-        in_room = self.is_in_room(self.user)
+        in_room = self.is_in_room()
 
         self.print_mouse()
 
