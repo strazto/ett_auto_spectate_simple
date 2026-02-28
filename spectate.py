@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import warnings
@@ -357,8 +358,13 @@ class SpectatorBot:
             )
             if response.status_code == 200:
                 return response.text
+
+            warnings.warn(
+                f"request failed {response.status_code} | {response.text} | {response.reason}"
+            )
             return None
-        except Exception:
+        except Exception as e:
+            warnings.warn(f"Caught exception {e}")
             return None
 
     def click_button(self, button_name: str, move_only: bool = False) -> None:
@@ -478,11 +484,23 @@ class SpectatorBot:
 @click.option(
     "--test", "-t", is_flag=True, default=False, help="Whether to avoid clicks"
 )
+@click.option(
+    "--debug", "-d", is_flag=True, default=False, help="Enable verbose logging"
+)
 @click.option("--user", "-u", help="Username", required=True)
-def main(user: str, test: bool) -> None:
+def main(user: str, test: bool, debug: bool) -> None:
     load_dotenv()
     api_key = os.getenv("API_KEY")
     server_base_url = os.getenv("SERVER_BASE_URL")
+
+    if debug:
+        logging.basicConfig()
+        logging.getLogger().setLevel(logging.DEBUG)
+        requests_log = logging.getLogger("urllib3")
+        requests_log.setLevel(logging.DEBUG)
+        requests_log.propagate = True
+        print("Debug logging enabled.")
+
     bot = SpectatorBot(
         user=user, test_mode=test, api_key=api_key, server_base_url=server_base_url
     )
