@@ -327,22 +327,28 @@ class SpectatorBot:
             and (x := x["attributes"])
             and x["state"]
         )
-        # state is -1 for ongoing
-        if state == -1:
+        # state is 1 for won
+        # 0 for ongoing (i think)
+        # -1 has some meaning too i think?
+        if state == 0:
             return True
 
         return False
 
-    def is_in_room_old(self, user: str) -> bool | None:
+    def is_in_room_old(self) -> bool | None:
         try:
-            resp = self._retrieve_url(self.server_base_url)
+            resp = self._retrieve_url(
+                f"{self.server_base_url}/ElevenServerLiteSnapshot"
+            )
             if not resp:
                 warnings.warn("Server returned none")
                 return None
             content = json.loads(resp)
 
             users = [
-                x for x in content.get("UsersInRooms", []) if x.get("UserName") == user
+                x
+                for x in content.get("UsersInRooms", [])
+                if x.get("UserName") == self.user
             ]
             if len(users) > 0:
                 return True
