@@ -296,20 +296,6 @@ def type(str):
     print(f"Pressed {str}")
     pyautogui.write(str)
 
-# For now, unused, as spectator gets in the way
-def visual_fallback_room_check():
-  if _resolution_config:
-            try:
-                ensure_menu_state(_resolution_config, target_open=True)
-                if is_menu_open(
-                    _resolution_config,
-                    template_path="templates_1080p/join_room_icon.jpg",
-                ):
-                    print("Visual fallback: Join icon detected.")
-                    return True
-            except Exception as ve:
-                print(f"Visual fallback failed: {ve}")
-
 
 def isInRoom(user):
     try:
