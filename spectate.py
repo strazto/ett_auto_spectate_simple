@@ -311,7 +311,7 @@ class SpectatorBot:
 
     def is_in_room(self) -> bool | None:
         resp = self._retrieve_url(
-            f"{self.server_base_url}/accounts/${self.user_id}/matches",
+            f"{self.server_base_url}/accounts/{self.user_id}/matches",
             {"page[number]": "1", "page[size]": "1"},
         )
         if not resp:
