@@ -164,7 +164,7 @@ class SpectatorBot:
         if not self._check_window_valid():
             return
 
-        print(f"Waiting for {self.user} to enter a room...", end="\r")
+        # print(f"Waiting for {self.user} to enter a room...", end="\r")
 
         # In waiting state, we print mouse coords for debugging
         self.print_mouse()
@@ -277,17 +277,24 @@ class SpectatorBot:
     ) -> tuple[int, int, int, int] | None:
         """Find the game window and return its (left, top, right, bottom) rect."""
         try:
-            # Connect to application
-            app = pywinauto.Application(backend="uia").connect(title_re=title_pattern)
-            window = app.window(title_re=title_pattern)
+            # Use Desktop(win32) instead of Application().connect(uia)
+            # This avoids ElementAmbiguousError and connects better to fullscreen games
+            desktop = pywinauto.Desktop(backend="win32")
+            windows = desktop.windows(title_re=title_pattern)
 
-            if not window.exists():
+            if not windows:
                 return None
 
-            try:
-                window.set_focus()
-            except Exception:
-                pass
+            # Prefer exact title match, then shorter titles (less likely to be browser tabs)
+            windows.sort(
+                key=lambda w: (w.window_text() != title_pattern, len(w.window_text()))
+            )
+            window = windows[0]
+
+            # try:
+            #     window.set_focus()
+            # except Exception:
+            #     pass
 
             rect = window.rectangle()
             return (rect.left, rect.top, rect.right, rect.bottom)
@@ -328,8 +335,6 @@ class SpectatorBot:
             and x["state"]
         )
 
-        if state is not None:
-            print(f"Got some state :) {state}")
         # state is 1 for won
         # 0 for ongoing (i think)
         # -1 has some meaning too i think?
